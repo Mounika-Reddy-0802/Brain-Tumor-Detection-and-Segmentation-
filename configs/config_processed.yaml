@@ -1,0 +1,45 @@
+data:
+  raw_dir: data/processed
+  processed_dir: data/processed
+  mask_dir: data/masks
+  img_size: 224
+  val_split: 0.15
+  test_split: 0.15
+  num_workers: 4
+  use_pseudo_masks: true
+
+model:
+  backbone: efficientnet_b3
+  pretrained: true
+  num_classes: 4
+  dropout: 0.4
+
+tensorflow:
+  detection_epochs: 32
+  classification_epochs: 64
+  freeze_backbone_epochs: 5
+  batch_size: 32
+  optimizer: adam
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  reduce_lr_factor: 0.5
+  reduce_lr_patience: 4
+  early_stopping_patience: 8
+  mixed_precision: true
+
+pytorch:
+  segmentation_epochs: 32
+  batch_size: 16
+  optimizer: adam
+  lr: 1.0e-4
+  weight_decay: 1.0e-5
+  scheduler: cosine_annealing
+  T_max: 32
+  early_stopping_patience: 8
+  mixed_precision: true
+
+segmentation:
+  encoder: efficientnet_b3
+  decoder_channels: [256, 128, 64, 32, 16]
+  dice_weight: 0.6
+  bce_weight: 0.4
