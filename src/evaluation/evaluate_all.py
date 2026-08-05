@@ -213,22 +213,28 @@ def main() -> None:
     classifier_path = Path("models/classification_model.keras")
     unet_path = Path("models/best_unet.pth") if Path("models/best_unet.pth").exists() else Path("models/unet_last.pth")
 
-    missing = [p for p in [detector_path, classifier_path, unet_path] if not p.exists()]
-    if missing:
-        missing_str = ", ".join(str(p) for p in missing)
-        raise FileNotFoundError(f"Missing trained model files: {missing_str}")
+    # Evaluate whatever has finished training. Refusing to report anything until
+    # all three exist means one failed training run costs the results of the two
+    # that succeeded.
+    available = {name: path for name, path in
+                 [("detection", detector_path),
+                  ("classification", classifier_path),
+                  ("segmentation", unet_path)]
+                 if path.exists()}
+    if not available:
+        raise FileNotFoundError(
+            "No trained models found. Expected at least one of "
+            f"{detector_path}, {classifier_path}, {unet_path}."
+        )
+    for name in ("detection", "classification", "segmentation"):
+        if name not in available:
+            print(f"Skipping {name}: no trained model on disk")
 
     raw_dir = resolve_raw_dir(config)
     image_paths, labels = list_split_image_paths(raw_dir, "Testing")
     labels_np = np.array(labels, dtype=np.int64)
 
-    detector = tf.keras.models.load_model(detector_path)
-    classifier = tf.keras.models.load_model(classifier_path)
-
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    unet = get_unet(encoder_name=config["segmentation"]["encoder"], pretrained=False).to(device)
-    unet.load_state_dict(torch.load(unet_path, map_location=device))
-
     img_size = int(data_cfg["img_size"])
     preprocessed = bool(data_cfg.get("preprocessed_input", False))
     batch_size = int(config["tensorflow"].get("batch_size", 32))
@@ -244,17 +250,26 @@ def main() -> None:
                 f"Run: python -m scripts.generate_masks --config {args.config}"
             )
 
-    results = {
-        "detection": evaluate_detection(
+    results: dict = {}
+
+    if "detection" in available:
+        detector = tf.keras.models.load_model(available["detection"])
+        results["detection"] = evaluate_detection(
             detector, image_paths, labels_np, img_size, preprocessed, batch_size
-        ),
-        "classification": evaluate_classification(
+        )
+
+    if "classification" in available:
+        classifier = tf.keras.models.load_model(available["classification"])
+        results["classification"] = evaluate_classification(
             classifier, image_paths, labels_np, img_size, preprocessed, batch_size
-        ),
-        "segmentation": evaluate_segmentation(
+        )
+
+    if "segmentation" in available:
+        unet = get_unet(encoder_name=config["segmentation"]["encoder"], pretrained=False).to(device)
+        unet.load_state_dict(torch.load(available["segmentation"], map_location=device))
+        results["segmentation"] = evaluate_segmentation(
             unet, image_paths, mask_paths, img_size, device, preprocessed, batch_size
-        ),
-    }
+        )
 
     output_dir = Path("outputs")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -262,11 +277,14 @@ def main() -> None:
     with open(output_dir / "evaluation_report.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2)
 
-    cm = results["classification"]["confusion_matrix"]
-    save_confusion_matrix(cm, output_dir / "classification_confusion_matrix.png")
+    if "classification" in results:
+        save_confusion_matrix(
+            results["classification"]["confusion_matrix"],
+            output_dir / "classification_confusion_matrix.png",
+        )
 
     print(json.dumps(results, indent=2))
-    print("Saved evaluation report to outputs/evaluation_report.json")
+    print(f"Saved evaluation report to outputs/evaluation_report.json ({', '.join(results)})")
 
 
 if __name__ == "__main__":

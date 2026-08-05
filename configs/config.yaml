@@ -45,7 +45,7 @@ pytorch:
   mixed_precision: true
 
 segmentation:
-  encoder: efficientnet_b3
+  encoder: efficientnet-b3            # smp registry key uses a hyphen
   decoder_channels: [256, 128, 64, 32, 16]
   dice_weight: 0.6
   bce_weight: 0.4

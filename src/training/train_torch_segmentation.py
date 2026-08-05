@@ -204,7 +204,7 @@ def main() -> None:
     amp_enabled = bool(pt_cfg.get("mixed_precision", True) and device.type == "cuda")
 
     model = get_unet(
-        encoder_name=str(seg_cfg.get("encoder", "efficientnet_b3")),
+        encoder_name=str(seg_cfg.get("encoder", "efficientnet-b3")),
         pretrained=bool(model_cfg.get("pretrained", True)),
     ).to(device)
 
