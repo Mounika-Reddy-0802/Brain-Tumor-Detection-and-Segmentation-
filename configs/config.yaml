@@ -1,3 +1,6 @@
+# Config for training straight from the unprocessed Dataset/ folder.
+# Every image goes through OpenCV crop/CLAHE on each epoch, which is slow.
+# For GPU runs prefer configs/config_processed.yaml.
 data:
   raw_dir: Dataset
   processed_dir: data/processed
@@ -7,6 +10,8 @@ data:
   test_split: 0.15
   num_workers: 4
   use_pseudo_masks: true
+  preprocessed_input: false           # run the OpenCV pipeline while loading
+  precomputed_masks: false            # regenerate pseudo-masks on the fly
 
 model:
   backbone: efficientnet_b3

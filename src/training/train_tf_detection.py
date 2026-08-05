@@ -57,6 +57,7 @@ def main() -> None:
     x_train, x_val = image_paths[train_idx], image_paths[val_idx]
     y_train, y_val = y_detection[train_idx], y_detection[val_idx]
 
+    preprocessed = bool(data_cfg.get("preprocessed_input", False))
     train_ds = build_tf_dataset(
         x_train,
         y_train,
@@ -64,6 +65,7 @@ def main() -> None:
         augment=True,
         shuffle=True,
         img_size=int(data_cfg["img_size"]),
+        preprocessed=preprocessed,
     )
     val_ds = build_tf_dataset(
         x_val,
@@ -72,6 +74,7 @@ def main() -> None:
         augment=False,
         shuffle=False,
         img_size=int(data_cfg["img_size"]),
+        preprocessed=preprocessed,
     )
 
     class_weights = compute_class_weight("balanced", classes=np.array([0, 1]), y=y_train)

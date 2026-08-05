@@ -5,7 +5,9 @@ import numpy as np
 import torch
 
 from src.data.preprocessing import preprocess_image
+from src.utils.project import EFFICIENTNET_INPUT_SCALE
 
+# Only the PyTorch U-Net needs these; the TF models normalize internally.
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 CLASS_NAMES = ["Glioma", "Meningioma", "No Tumor", "Pituitary"]
@@ -28,9 +30,11 @@ class BrainTumorPipeline:
         self.device = device
 
     def _tf_input(self, img: np.ndarray) -> np.ndarray:
-        return np.expand_dims((img - IMAGENET_MEAN) / IMAGENET_STD, 0).astype(np.float32)
+        """EfficientNet rescales and normalizes internally, so it wants [0, 255]."""
+        return np.expand_dims(img * EFFICIENTNET_INPUT_SCALE, 0).astype(np.float32)
 
     def _torch_input(self, img: np.ndarray) -> torch.Tensor:
+        """smp's EfficientNet encoder has no built-in preprocessing, so normalize here."""
         norm = (img - IMAGENET_MEAN) / IMAGENET_STD
         return torch.FloatTensor(norm.transpose(2, 0, 1)).unsqueeze(0).to(self.device)
 

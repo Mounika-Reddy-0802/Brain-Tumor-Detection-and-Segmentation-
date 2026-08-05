@@ -56,6 +56,31 @@ def preprocess_image(image_path: str, target_size: int = 224) -> np.ndarray:
     return img.astype(np.float32) / 255.0
 
 
+def load_preprocessed_image(image_path: str, target_size: int = 224) -> np.ndarray:
+    """Read an image that has already been through preprocess_image.
+
+    Decodes and resizes only. Re-running crop_brain_region and CLAHE on a file
+    written by preprocess_dataset would enhance contrast twice and desync
+    training from the inference pipeline.
+    """
+    img = cv2.imread(image_path)
+    if img is None:
+        raise ValueError(f"Failed to read image: {image_path}")
+
+    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    if img.shape[:2] != (target_size, target_size):
+        img = cv2.resize(img, (target_size, target_size), interpolation=cv2.INTER_AREA)
+
+    return img.astype(np.float32) / 255.0
+
+
+def load_image(image_path: str, target_size: int = 224, preprocessed: bool = False) -> np.ndarray:
+    """Load an MRI as RGB float32 in [0, 1], preprocessing it only if needed."""
+    if preprocessed:
+        return load_preprocessed_image(image_path, target_size)
+    return preprocess_image(image_path, target_size)
+
+
 def generate_pseudo_mask(image_path: str, target_size: int = 224) -> np.ndarray:
     """Generate a binary pseudo-mask via Otsu thresholding on bright tissue regions."""
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)

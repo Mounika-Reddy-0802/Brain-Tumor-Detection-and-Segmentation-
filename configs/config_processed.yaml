@@ -1,3 +1,6 @@
+# Config for training on the already-preprocessed images in data/processed.
+# Use this one on Kaggle: it skips the per-epoch OpenCV crop/CLAHE work, which
+# otherwise starves the GPU because it runs single-threaded through Python.
 data:
   raw_dir: data/processed
   processed_dir: data/processed
@@ -5,8 +8,10 @@ data:
   img_size: 224
   val_split: 0.15
   test_split: 0.15
-  num_workers: 4
+  num_workers: 2                      # Kaggle gives 4 vCPUs; 2 workers avoids thrashing
   use_pseudo_masks: true
+  preprocessed_input: true            # files already cropped/CLAHE'd; decode only
+  precomputed_masks: true             # read data/masks instead of regenerating each epoch
 
 model:
   backbone: efficientnet_b3
@@ -15,6 +20,7 @@ model:
   dropout: 0.4
 
 tensorflow:
+  require_gpu: true                   # fail fast on Kaggle if the accelerator is off
   detection_epochs: 32
   classification_epochs: 64
   freeze_backbone_epochs: 5

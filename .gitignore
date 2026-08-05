@@ -11,9 +11,20 @@ venv/
 .ipynb_checkpoints/
 
 logs/
+run_logs/
 checkpoints/
 models/
 outputs/
+
+# Derived from Dataset/ by src/data/preprocessing.py and scripts/generate_masks.py.
+# Regenerate rather than commit ~13k files; both take a couple of minutes.
+data/processed/
+data/masks/
+!data/processed/.gitkeep
+!data/masks/.gitkeep
+
+# Submission bundles
+*.zip
 
 *.keras
 *.h5

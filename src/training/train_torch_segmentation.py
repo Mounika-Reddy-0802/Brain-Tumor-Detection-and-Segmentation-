@@ -7,7 +7,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from sklearn.model_selection import StratifiedShuffleSplit
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from torch.optim import Adam
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader, WeightedRandomSampler
@@ -17,7 +17,13 @@ from src.data.augmentation import get_eval_transforms, get_train_transforms
 from src.data.torch_dataset import SegmentationDataset
 from src.models.torch_unet import get_unet
 from src.utils.gpu_setup import configure_gpu
-from src.utils.project import CLASS_NAMES, list_split_image_paths, load_config, resolve_raw_dir
+from src.utils.project import (
+    CLASS_NAMES,
+    list_split_image_paths,
+    load_config,
+    mask_paths_for,
+    resolve_raw_dir,
+)
 
 
 class CombinedSegmentationLoss(nn.Module):
@@ -84,7 +90,7 @@ def validate(
         for images, masks in loader:
             images = images.to(device)
             masks = masks.to(device)
-            with autocast(enabled=amp_enabled):
+            with autocast("cuda", enabled=amp_enabled):
                 logits = model(images)
                 loss = criterion(logits, masks)
             total_loss += float(loss.item())
@@ -136,20 +142,44 @@ def main() -> None:
     sampler = WeightedRandomSampler(sample_weights, len(sample_weights), replacement=True)
 
     img_size = int(data_cfg["img_size"])
+    use_pseudo_masks = bool(data_cfg.get("use_pseudo_masks", True))
+    preprocessed = bool(data_cfg.get("preprocessed_input", False))
+
+    # Reading precomputed masks avoids re-running Otsu on every image every
+    # epoch, which is what otherwise keeps the GPU waiting on the data loader.
+    train_masks: list[str] | None = None
+    val_masks: list[str] | None = None
+    if bool(data_cfg.get("precomputed_masks", False)):
+        mask_dir = Path(data_cfg["mask_dir"])
+        train_masks = mask_paths_for(x_train, raw_dir, mask_dir)
+        val_masks = mask_paths_for(x_val, raw_dir, mask_dir)
+
+        missing = [p for p in train_masks + val_masks if not Path(p).exists()]
+        if missing:
+            raise FileNotFoundError(
+                f"precomputed_masks is enabled but {len(missing)} mask(s) are missing, "
+                f"starting with {missing[0]}. "
+                f"Run: python -m scripts.generate_masks --config {args.config}"
+            )
+        print(f"Using {len(train_masks) + len(val_masks)} precomputed masks from {mask_dir}")
+    else:
+        print("Generating pseudo-masks on the fly (slower; see scripts/generate_masks.py)")
 
     train_dataset = SegmentationDataset(
         image_paths=x_train,
-        mask_paths=None,
-        use_pseudo_masks=bool(data_cfg.get("use_pseudo_masks", True)),
+        mask_paths=train_masks,
+        use_pseudo_masks=use_pseudo_masks,
         transform=get_train_transforms(),
         img_size=img_size,
+        preprocessed=preprocessed,
     )
     val_dataset = SegmentationDataset(
         image_paths=x_val,
-        mask_paths=None,
-        use_pseudo_masks=bool(data_cfg.get("use_pseudo_masks", True)),
+        mask_paths=val_masks,
+        use_pseudo_masks=use_pseudo_masks,
         transform=get_eval_transforms(),
         img_size=img_size,
+        preprocessed=preprocessed,
     )
 
     batch_size = int(pt_cfg["batch_size"])
@@ -192,7 +222,7 @@ def main() -> None:
         T_max=int(pt_cfg.get("T_max", pt_cfg["segmentation_epochs"])),
         eta_min=1e-6,
     )
-    scaler = GradScaler(enabled=amp_enabled)
+    scaler = GradScaler("cuda", enabled=amp_enabled)
 
     early_stopping = EarlyStopping(patience=int(pt_cfg["early_stopping_patience"]))
 
@@ -207,7 +237,7 @@ def main() -> None:
             masks = masks.to(device)
 
             optimizer.zero_grad(set_to_none=True)
-            with autocast(enabled=amp_enabled):
+            with autocast("cuda", enabled=amp_enabled):
                 logits = model(images)
                 loss = criterion(logits, masks)
 

@@ -30,7 +30,9 @@ Expected classes under:
 - Testing/notumor
 - Testing/pituitary
 
-The code first tries data/raw and automatically falls back to Dataset if data/raw is not present.
+The bundled `Dataset/` folder holds 1400 training and 400 testing images per class.
+`data/processed/` and `data/masks/` are derived from it and are not committed —
+regenerate them with the commands below.
 
 ## Setup
 
@@ -39,30 +41,70 @@ The code first tries data/raw and automatically falls back to Dataset if data/ra
 
    pip install -r requirements.txt
 
+## Configurations
+
+| Config | Reads from | Use for |
+|---|---|---|
+| `configs/config.yaml` | `Dataset/` | Running straight from the original images; applies crop/CLAHE while loading, which is slow |
+| `configs/config_processed.yaml` | `data/processed/` | GPU training; decodes prepared JPEGs and reads precomputed masks |
+
+Two flags control this: `data.preprocessed_input` (skip the OpenCV pipeline at load
+time because the files on disk already went through it) and `data.precomputed_masks`
+(read `data/masks/` instead of regenerating pseudo-masks every epoch). Both matter
+for throughput — with them off, the Python/OpenCV work single-threads the input
+pipeline and leaves the GPU idle.
+
 ## Training Sequence
+
+Training is done on Kaggle (see below), but the same commands run anywhere:
+
+0. Prepare the derived data (once, ~3 min on local disk):
+
+   python -m src.data.preprocessing --raw-dir Dataset --out-dir data/processed --img-size 224
+   python -m scripts.generate_masks --config configs/config_processed.yaml
 
 1. Detection model:
 
-   python -m src.training.train_tf_detection --config configs/config.yaml
+   python -m src.training.train_tf_detection --config configs/config_processed.yaml
 
 2. Classification model:
 
-   python -m src.training.train_tf_classification --config configs/config.yaml
+   python -m src.training.train_tf_classification --config configs/config_processed.yaml
 
 3. Segmentation model:
 
-   python -m src.training.train_torch_segmentation --config configs/config.yaml
+   python -m src.training.train_torch_segmentation --config configs/config_processed.yaml
 
-4. Evaluate all tasks:
+4. Evaluate all tasks on the held-out Testing split:
 
-   python -m src.evaluation.evaluate_all --config configs/config.yaml
+   python -m src.evaluation.evaluate_all --config configs/config_processed.yaml
 
 5. Launch app:
 
    streamlit run app/streamlit_app.py
 
+## Training on Kaggle
+
+`notebooks/kaggle_train.ipynb` runs the full sequence on a Kaggle GPU. Set the
+accelerator to GPU and Internet to On, point `REPO_URL` at your repository, and run
+all cells. Roughly two hours of GPU time end to end, against a 30 h weekly quota.
+
 ## Notes
 
+- **Input range**: `keras.applications.EfficientNet*` carries its own
+  `Rescaling(1/255)` and `Normalization` layers, so every TensorFlow entry point
+  feeds it pixels in `[0, 255]` (`EFFICIENTNET_INPUT_SCALE`). The PyTorch U-Net
+  encoder has no built-in preprocessing and uses explicit ImageNet mean/std instead.
+- **Keras 3.11**: loading ImageNet weights into the V1 EfficientNets is broken in
+  this version (an unadapted `Normalization` layer shifts the index-based `.h5`
+  loader). `src/models/backbone.py` falls back to name-based loading, so both older
+  and newer Keras work.
 - Run GPU setup before loading models to allow TensorFlow and PyTorch to coexist.
-- If you only have CPU, scripts still run but training will be slow.
-- Segmentation supports pseudo-masks when no expert masks are available.
+- Set `tensorflow.require_gpu: true` to fail fast rather than train for hours on CPU.
+- **Pseudo-masks are not tumour masks.** `generate_pseudo_mask` applies Otsu
+  thresholding and keeps the largest connected component, which outlines the brain.
+  This dataset ships no expert annotations, so segmentation Dice/IoU measures how
+  well the U-Net reproduces that thresholding rule — describe it that way in any
+  write-up, and set `use_pseudo_masks: false` with real masks for anything better.
+- Working inside a OneDrive-synced folder makes data preparation very slow, because
+  reading each dehydrated file triggers a download. Prefer Kaggle or a local disk.

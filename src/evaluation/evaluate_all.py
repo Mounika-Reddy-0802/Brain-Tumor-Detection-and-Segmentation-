@@ -4,6 +4,7 @@ import argparse
 import json
 from pathlib import Path
 
+import cv2
 import matplotlib.pyplot as plt
 import numpy as np
 import seaborn as sns
@@ -11,7 +12,7 @@ import tensorflow as tf
 import torch
 from tqdm import tqdm
 
-from src.data.preprocessing import generate_pseudo_mask, preprocess_image
+from src.data.preprocessing import generate_pseudo_mask, load_image
 from src.evaluation.metrics import (
     classification_metrics,
     detection_metrics,
@@ -20,8 +21,17 @@ from src.evaluation.metrics import (
 )
 from src.models.torch_unet import get_unet
 from src.utils.gpu_setup import configure_gpu
-from src.utils.project import CLASS_NAMES, CLASS_TO_IDX, list_split_image_paths, load_config, resolve_raw_dir
+from src.utils.project import (
+    CLASS_NAMES,
+    CLASS_TO_IDX,
+    EFFICIENTNET_INPUT_SCALE,
+    list_split_image_paths,
+    load_config,
+    mask_paths_for,
+    resolve_raw_dir,
+)
 
+# Used by the PyTorch U-Net only; the TF models normalize internally.
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 
@@ -32,52 +42,128 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def to_tf_input(image_path: str, img_size: int) -> np.ndarray:
-    img = preprocess_image(image_path, target_size=img_size)
-    norm = (img - IMAGENET_MEAN) / IMAGENET_STD
-    return np.expand_dims(norm, axis=0).astype(np.float32)
+def load_image_batch(image_paths: list[str], img_size: int, preprocessed: bool) -> np.ndarray:
+    """Stack images as (N, H, W, 3) float32 in [0, 1]."""
+    return np.stack([load_image(p, img_size, preprocessed) for p in image_paths]).astype(np.float32)
 
 
-def evaluate_detection(detector, image_paths: list[str], labels: np.ndarray, img_size: int) -> dict:
+def predict_in_batches(
+    model,
+    image_paths: list[str],
+    img_size: int,
+    preprocessed: bool,
+    batch_size: int,
+    desc: str,
+) -> np.ndarray:
+    """Run a Keras model over all images, batched.
+
+    Calling model.predict() once per image carries enough per-call overhead to
+    dominate the runtime on CPU, so batch the forward passes.
+    """
+    outputs = []
+    for start in tqdm(range(0, len(image_paths), batch_size), desc=desc):
+        chunk = image_paths[start : start + batch_size]
+        # EfficientNet rescales and normalizes internally, so it wants [0, 255].
+        batch = load_image_batch(chunk, img_size, preprocessed) * EFFICIENTNET_INPUT_SCALE
+        outputs.append(model.predict(batch, verbose=0))
+    return np.concatenate(outputs, axis=0)
+
+
+def evaluate_detection(
+    detector,
+    image_paths: list[str],
+    labels: np.ndarray,
+    img_size: int,
+    preprocessed: bool,
+    batch_size: int,
+) -> dict:
     y_true = np.where(labels == CLASS_TO_IDX["notumor"], 0, 1)
-    probs = []
-    for path in tqdm(image_paths, desc="Detection evaluation"):
-        prob = float(detector.predict(to_tf_input(path, img_size), verbose=0)[0, 0])
-        probs.append(prob)
-    return detection_metrics(y_true, np.array(probs, dtype=np.float32))
+    probs = predict_in_batches(
+        detector, image_paths, img_size, preprocessed, batch_size, "Detection evaluation"
+    )[:, 0]
+    return detection_metrics(y_true, probs.astype(np.float32))
 
 
-def evaluate_classification(classifier, image_paths: list[str], labels: np.ndarray, img_size: int) -> dict:
-    preds = []
-    for path in tqdm(image_paths, desc="Classification evaluation"):
-        cls_probs = classifier.predict(to_tf_input(path, img_size), verbose=0)[0]
-        preds.append(int(np.argmax(cls_probs)))
-    return classification_metrics(labels, np.array(preds, dtype=np.int64), CLASS_NAMES)
+def evaluate_classification(
+    classifier,
+    image_paths: list[str],
+    labels: np.ndarray,
+    img_size: int,
+    preprocessed: bool,
+    batch_size: int,
+) -> dict:
+    cls_probs = predict_in_batches(
+        classifier, image_paths, img_size, preprocessed, batch_size, "Classification evaluation"
+    )
+    preds = np.argmax(cls_probs, axis=1).astype(np.int64)
+    return classification_metrics(labels, preds, CLASS_NAMES)
 
 
-def evaluate_segmentation(model, image_paths: list[str], img_size: int, device: torch.device) -> dict:
+def load_true_masks(
+    image_paths: list[str],
+    mask_paths: list[str] | None,
+    img_size: int,
+) -> np.ndarray:
+    """Stack reference masks as (N, H, W) float32 in {0, 1}."""
+    masks = []
+    for idx, image_path in enumerate(image_paths):
+        if mask_paths is None:
+            mask = generate_pseudo_mask(image_path, target_size=img_size)
+        else:
+            mask = cv2.imread(mask_paths[idx], cv2.IMREAD_GRAYSCALE)
+            if mask is None:
+                raise ValueError(f"Failed to read mask: {mask_paths[idx]}")
+            if mask.shape != (img_size, img_size):
+                mask = cv2.resize(mask, (img_size, img_size), interpolation=cv2.INTER_NEAREST)
+        masks.append((mask > 127).astype(np.float32))
+    return np.stack(masks)
+
+
+def evaluate_segmentation(
+    model,
+    image_paths: list[str],
+    mask_paths: list[str] | None,
+    img_size: int,
+    device: torch.device,
+    preprocessed: bool,
+    batch_size: int,
+) -> dict:
+    """Dice and IoU averaged per image.
+
+    The reference masks are Otsu pseudo-masks, not expert annotations, and the
+    model was trained against masks from the same generator. These numbers say
+    how well the U-Net reproduces that thresholding rule, not how well it finds
+    tumours. Report them with that caveat.
+    """
     model.eval()
     dices = []
     ious = []
 
     with torch.no_grad():
-        for path in tqdm(image_paths, desc="Segmentation evaluation"):
-            img = preprocess_image(path, target_size=img_size)
-            mask_np = (generate_pseudo_mask(path, target_size=img_size) > 127).astype(np.float32)
+        for start in tqdm(range(0, len(image_paths), batch_size), desc="Segmentation evaluation"):
+            chunk = image_paths[start : start + batch_size]
+            chunk_masks = None if mask_paths is None else mask_paths[start : start + batch_size]
 
-            img_norm = (img - IMAGENET_MEAN) / IMAGENET_STD
-            img_tensor = torch.FloatTensor(img_norm.transpose(2, 0, 1)).unsqueeze(0).to(device)
-            true_mask = torch.FloatTensor(mask_np).unsqueeze(0).unsqueeze(0).to(device)
+            imgs = load_image_batch(chunk, img_size, preprocessed)
+            # smp's encoder has no built-in preprocessing, so normalize explicitly.
+            imgs = (imgs - IMAGENET_MEAN) / IMAGENET_STD
+            img_tensor = torch.from_numpy(imgs.transpose(0, 3, 1, 2)).float().to(device)
 
-            pred_logits = model(img_tensor)
-            pred_probs = torch.sigmoid(pred_logits)
+            true_masks = load_true_masks(chunk, chunk_masks, img_size)
+            true_tensor = torch.from_numpy(true_masks).unsqueeze(1).to(device)
 
-            dices.append(dice_coefficient(pred_probs, true_mask))
-            ious.append(iou_score(pred_probs, true_mask))
+            pred_probs = torch.sigmoid(model(img_tensor))
+
+            # Score one image at a time: the metric helpers flatten their input,
+            # so scoring a whole batch would pool pixels across images.
+            for i in range(len(chunk)):
+                dices.append(dice_coefficient(pred_probs[i : i + 1], true_tensor[i : i + 1]))
+                ious.append(iou_score(pred_probs[i : i + 1], true_tensor[i : i + 1]))
 
     return {
         "dice": float(np.mean(dices)) if dices else 0.0,
         "iou": float(np.mean(ious)) if ious else 0.0,
+        "reference_masks": "precomputed pseudo-masks" if mask_paths else "on-the-fly pseudo-masks",
     }
 
 
@@ -121,10 +207,30 @@ def main() -> None:
     unet.load_state_dict(torch.load(unet_path, map_location=device))
 
     img_size = int(data_cfg["img_size"])
+    preprocessed = bool(data_cfg.get("preprocessed_input", False))
+    batch_size = int(config["tensorflow"].get("batch_size", 32))
+
+    mask_paths = None
+    if bool(data_cfg.get("precomputed_masks", False)):
+        mask_paths = mask_paths_for(image_paths, raw_dir, Path(data_cfg["mask_dir"]))
+        missing_masks = [p for p in mask_paths if not Path(p).exists()]
+        if missing_masks:
+            raise FileNotFoundError(
+                f"precomputed_masks is enabled but {len(missing_masks)} mask(s) are missing, "
+                f"starting with {missing_masks[0]}. "
+                f"Run: python -m scripts.generate_masks --config {args.config}"
+            )
+
     results = {
-        "detection": evaluate_detection(detector, image_paths, labels_np, img_size),
-        "classification": evaluate_classification(classifier, image_paths, labels_np, img_size),
-        "segmentation": evaluate_segmentation(unet, image_paths, img_size, device),
+        "detection": evaluate_detection(
+            detector, image_paths, labels_np, img_size, preprocessed, batch_size
+        ),
+        "classification": evaluate_classification(
+            classifier, image_paths, labels_np, img_size, preprocessed, batch_size
+        ),
+        "segmentation": evaluate_segmentation(
+            unet, image_paths, mask_paths, img_size, device, preprocessed, batch_size
+        ),
     }
 
     output_dir = Path("outputs")
