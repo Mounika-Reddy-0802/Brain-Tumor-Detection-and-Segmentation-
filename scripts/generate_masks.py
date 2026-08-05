@@ -7,11 +7,12 @@ training can just read them.
 
     python -m scripts.generate_masks --config configs/config_processed.yaml
 
-A note on what these masks are: generate_pseudo_mask applies Otsu thresholding
-and keeps the largest connected component, so it segments the *brain*, not the
-tumour. It is a stand-in for expert annotations, which this dataset does not
-ship. Any Dice/IoU reported against it measures brain-region agreement and
-should be described that way in the report.
+A note on what these masks are: they are *weak labels* derived from intensity,
+not expert annotations, which this dataset does not ship. generate_pseudo_mask
+looks for the brightest compact blob inside the brain, which approximates an
+enhancing tumour on T1-contrast imaging. Scans labelled notumor get an empty
+mask. Describe the resulting Dice/IoU as agreement with an intensity-derived
+weak label, and see the README for how to train against real annotations.
 """
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ import argparse
 from pathlib import Path
 
 import cv2
+import numpy as np
 from tqdm import tqdm
 
 from src.data.preprocessing import generate_pseudo_mask
@@ -54,22 +56,30 @@ def generate_split_masks(
         return 0, 0
 
     image_paths = [
-        path
+        (class_name, path)
         for class_name in CLASS_NAMES
         if (split_dir / class_name).exists()
         for path in sorted((split_dir / class_name).iterdir())
         if path.suffix.lower() in IMAGE_SUFFIXES
     ]
 
+    empty_mask = np.zeros((img_size, img_size), dtype=np.uint8)
     written = 0
     skipped = 0
-    for image_path in tqdm(image_paths, desc=f"{split} masks"):
+    for class_name, image_path in tqdm(image_paths, desc=f"{split} masks"):
         out_path = mask_path_for(image_path, raw_dir, mask_dir)
         if out_path.exists() and not overwrite:
             skipped += 1
             continue
 
-        mask = generate_pseudo_mask(str(image_path), img_size)
+        # A scan labelled notumor has no lesion to outline, and we know that from
+        # the folder it sits in. Running the intensity heuristic here would invent
+        # a target out of whatever happens to be brightest.
+        if class_name == "notumor":
+            mask = empty_mask
+        else:
+            mask = generate_pseudo_mask(str(image_path), img_size)
+
         out_path.parent.mkdir(parents=True, exist_ok=True)
         if not cv2.imwrite(str(out_path), mask):
             raise RuntimeError(f"Failed to write mask: {out_path}")

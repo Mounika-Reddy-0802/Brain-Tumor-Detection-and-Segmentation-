@@ -81,22 +81,147 @@ def load_image(image_path: str, target_size: int = 224, preprocessed: bool = Fal
     return preprocess_image(image_path, target_size)
 
 
-def generate_pseudo_mask(image_path: str, target_size: int = 224) -> np.ndarray:
-    """Generate a binary pseudo-mask via Otsu thresholding on bright tissue regions."""
+def _fill_holes(mask: np.ndarray) -> np.ndarray:
+    """Fill interior holes by flood-filling the background from the border."""
+    h, w = mask.shape
+    flood = mask.copy()
+    scratch = np.zeros((h + 2, w + 2), np.uint8)
+    cv2.floodFill(flood, scratch, (0, 0), 255)
+    return mask | cv2.bitwise_not(flood)
+
+
+def segment_brain(gray: np.ndarray) -> np.ndarray:
+    """Binary mask of the head/brain region: Otsu, largest component, holes filled."""
+    _, thresh = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    thresh = cv2.morphologyEx(thresh, cv2.MORPH_CLOSE, kernel)
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(thresh)
+    if num_labels <= 1:
+        return np.zeros_like(gray, dtype=np.uint8)
+
+    largest = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    brain = ((labels == largest) * 255).astype(np.uint8)
+    return _fill_holes(brain)
+
+
+def generate_pseudo_mask(
+    image_path: str,
+    target_size: int = 224,
+    hyper_percentile: float = 96.0,
+    sigma_above_mean: float = 1.5,
+    min_area_frac: float = 0.004,
+    max_area_frac: float = 0.30,
+    rim_erosion: int = 17,
+    min_circularity: float = 0.25,
+    min_zscore: float = 2.0,
+) -> np.ndarray:
+    """Approximate a tumour mask from intensity alone, for use as a weak label.
+
+    On T1-contrast-enhanced MRI a tumour is typically hyperintense relative to
+    surrounding brain tissue, so the mask is the brightest compact blob inside the
+    brain:
+
+    1. Segment the head, then erode inward. The skull and scalp are bright too and
+       would otherwise dominate the "brightest region" search.
+    2. Threshold at a high percentile of the *intra-brain* intensity distribution,
+       and require the value to also sit well above the tissue mean, so images
+       without a bright lesion do not produce a mask by construction.
+    3. Keep the highest-scoring connected component, preferring blobs that are
+       compact (solid) and plausibly sized relative to the brain.
+
+    Returns an all-zero mask when nothing qualifies, which is the desired answer
+    for a scan with no tumour.
+
+    This is a weak label, not ground truth. It cannot see non-enhancing tumour and
+    it will occasionally lock onto normal bright structures. For genuine
+    segmentation quality, train against a dataset that ships expert annotations.
+    """
     img = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
     if img is None:
         raise ValueError(f"Failed to read image: {image_path}")
 
     img = crop_brain_region(img)
     img = cv2.resize(img, (target_size, target_size), interpolation=cv2.INTER_AREA)
+    empty = np.zeros((target_size, target_size), dtype=np.uint8)
 
-    _, mask = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(mask)
-    if num_labels > 2:
-        largest_cc = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
-        mask = ((labels == largest_cc) * 255).astype(np.uint8)
+    brain = segment_brain(img)
+    if not brain.any():
+        return empty
 
-    return mask
+    # Drop the skull/scalp rim so the search sees brain tissue only.
+    rim_kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (rim_erosion, rim_erosion))
+    interior = cv2.erode(brain, rim_kernel)
+    interior_area = int((interior > 0).sum())
+    if interior_area < 200:
+        return empty
+
+    values = img[interior > 0]
+    threshold = max(
+        float(np.percentile(values, hyper_percentile)),
+        float(values.mean() + sigma_above_mean * values.std()),
+    )
+
+    candidates = ((img >= threshold) & (interior > 0)).astype(np.uint8) * 255
+    candidates = cv2.morphologyEx(
+        candidates, cv2.MORPH_OPEN, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    )
+    candidates = cv2.morphologyEx(
+        candidates, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (7, 7))
+    )
+
+    # Anything hugging the eroded edge is skull or scalp that survived the erosion,
+    # not a lesion. This is the single most common false positive.
+    edge_band = cv2.subtract(
+        interior, cv2.erode(interior, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5)))
+    )
+
+    intensity_mean = float(values.mean())
+    intensity_std = float(values.std()) + 1e-6
+
+    num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(candidates)
+    best_label = -1
+    best_score = 0.0
+    for label in range(1, num_labels):
+        area = int(stats[label, cv2.CC_STAT_AREA])
+        if area < min_area_frac * interior_area or area > max_area_frac * interior_area:
+            continue
+
+        component = (labels == label).astype(np.uint8)
+        if cv2.countNonZero(cv2.bitwise_and(component * 255, edge_band)) > 0.15 * area:
+            continue
+
+        contours, _ = cv2.findContours(component, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            continue
+        contour = max(contours, key=cv2.contourArea)
+
+        # Rim slivers are long and thin; a lesion is roughly blob-shaped.
+        perimeter = cv2.arcLength(contour, True)
+        circularity = 4 * np.pi * area / (perimeter**2) if perimeter > 0 else 0.0
+        if circularity < min_circularity:
+            continue
+
+        # Require the blob to be a genuine intensity outlier, not just the
+        # brightest thing in an image that happens to have no lesion.
+        blob_mean = float(img[component > 0].mean())
+        if (blob_mean - intensity_mean) / intensity_std < min_zscore:
+            continue
+
+        hull_area = cv2.contourArea(cv2.convexHull(contour))
+        solidity = area / hull_area if hull_area > 0 else 0.0
+
+        # Favour large, solid blobs; scattered speckle scores poorly.
+        score = area * solidity
+        if score > best_score:
+            best_score = score
+            best_label = label
+
+    if best_label < 0:
+        return empty
+
+    mask = ((labels == best_label) * 255).astype(np.uint8)
+    return _fill_holes(mask)
 
 
 def preprocess_dataset(raw_dir: Path, out_dir: Path, target_size: int = 224) -> None:

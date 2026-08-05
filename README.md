@@ -101,10 +101,26 @@ all cells. Roughly two hours of GPU time end to end, against a 30 h weekly quota
   and newer Keras work.
 - Run GPU setup before loading models to allow TensorFlow and PyTorch to coexist.
 - Set `tensorflow.require_gpu: true` to fail fast rather than train for hours on CPU.
-- **Pseudo-masks are not tumour masks.** `generate_pseudo_mask` applies Otsu
-  thresholding and keeps the largest connected component, which outlines the brain.
-  This dataset ships no expert annotations, so segmentation Dice/IoU measures how
-  well the U-Net reproduces that thresholding rule — describe it that way in any
-  write-up, and set `use_pseudo_masks: false` with real masks for anything better.
+- **Segmentation labels are weak, and their quality is the limiting factor.**
+  This dataset ships no expert annotations. `generate_pseudo_mask` approximates a
+  lesion as the brightest compact blob inside the brain, after eroding away the
+  skull and rejecting elongated or non-outlier components; scans labelled
+  `notumor` get an empty mask from their folder label. Measured on 40 images per
+  class, it fires on 73% of tumour scans and 42% of `notumor` scans, and visual
+  inspection shows roughly a third of the masks land on the actual lesion — the
+  rest catch eye globes, skull-base structures or ventricles. It is a usable weak
+  label and far better than the previous version (which outlined the whole brain
+  at ~70% of brain area on every image, carrying no tumour information at all),
+  but it is not ground truth.
+
+  **For genuine segmentation quality, train against expert masks.** The Cheng
+  figshare dataset (https://doi.org/10.6084/m9.figshare.1512427.v5, CC BY 4.0)
+  covers exactly these three tumour types — 3064 T1-contrast slices from 233
+  patients with manually traced tumour borders. Convert its `.mat` files to
+  image/mask pairs, point `data.mask_dir` at them and set `use_pseudo_masks: false`.
+  Report Dice against those, not against the heuristic.
+- Segmentation Dice/IoU is averaged over images that carry a reference lesion.
+  Empty-reference scans are reported separately as a true-negative rate, because
+  an empty prediction against an empty target scores 1.0 and would inflate the mean.
 - Working inside a OneDrive-synced folder makes data preparation very slow, because
   reading each dehydrated file triggers a download. Prefer Kaggle or a local disk.

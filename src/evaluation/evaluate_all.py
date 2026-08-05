@@ -128,16 +128,23 @@ def evaluate_segmentation(
     preprocessed: bool,
     batch_size: int,
 ) -> dict:
-    """Dice and IoU averaged per image.
+    """Dice and IoU over the images that actually carry a reference lesion.
 
-    The reference masks are Otsu pseudo-masks, not expert annotations, and the
-    model was trained against masks from the same generator. These numbers say
-    how well the U-Net reproduces that thresholding rule, not how well it finds
-    tumours. Report them with that caveat.
+    Scans labelled notumor have an empty reference mask, and an empty prediction
+    against an empty target scores Dice 1.0 through the smoothing term. Averaging
+    those in would inflate the headline number, so they are scored separately as
+    a true-negative rate.
+
+    The reference masks are intensity-derived weak labels, not expert
+    annotations, and the model trains against masks from the same generator.
+    These numbers measure agreement with that heuristic, not tumour localisation
+    accuracy. See the README before quoting them.
     """
     model.eval()
     dices = []
     ious = []
+    empty_reference = 0
+    empty_reference_correct = 0
 
     with torch.no_grad():
         for start in tqdm(range(0, len(image_paths), batch_size), desc="Segmentation evaluation"):
@@ -157,13 +164,29 @@ def evaluate_segmentation(
             # Score one image at a time: the metric helpers flatten their input,
             # so scoring a whole batch would pool pixels across images.
             for i in range(len(chunk)):
-                dices.append(dice_coefficient(pred_probs[i : i + 1], true_tensor[i : i + 1]))
-                ious.append(iou_score(pred_probs[i : i + 1], true_tensor[i : i + 1]))
+                truth = true_tensor[i : i + 1]
+                prediction = pred_probs[i : i + 1]
+
+                if truth.sum() == 0:
+                    empty_reference += 1
+                    predicted_area = int((prediction > 0.5).sum())
+                    # "Correct" means the model also stayed essentially silent.
+                    if predicted_area <= 0.001 * truth.numel():
+                        empty_reference_correct += 1
+                    continue
+
+                dices.append(dice_coefficient(prediction, truth))
+                ious.append(iou_score(prediction, truth))
 
     return {
         "dice": float(np.mean(dices)) if dices else 0.0,
         "iou": float(np.mean(ious)) if ious else 0.0,
-        "reference_masks": "precomputed pseudo-masks" if mask_paths else "on-the-fly pseudo-masks",
+        "scored_images": len(dices),
+        "empty_reference_images": empty_reference,
+        "empty_reference_true_negative_rate": (
+            empty_reference_correct / empty_reference if empty_reference else 0.0
+        ),
+        "reference_masks": "precomputed weak labels" if mask_paths else "on-the-fly weak labels",
     }
 
 
