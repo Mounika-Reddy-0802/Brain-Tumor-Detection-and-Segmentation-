@@ -4,7 +4,8 @@ torch>=2.2.0
 torchvision>=0.17.0
 timm>=0.9.12
 segmentation-models-pytorch>=0.3.3
-tensorflow-addons>=0.23.0
+# Optional: tensorflow-addons has no wheels on some Python/Windows combos and is not required by current source.
+# tensorflow-addons>=0.23.0
 
 # Image Processing
 opencv-python>=4.9.0

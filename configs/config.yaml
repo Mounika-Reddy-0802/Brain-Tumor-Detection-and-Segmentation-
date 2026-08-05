@@ -1,5 +1,5 @@
 data:
-  raw_dir: data/raw
+  raw_dir: Dataset
   processed_dir: data/processed
   mask_dir: data/masks
   img_size: 224
@@ -15,6 +15,7 @@ model:
   dropout: 0.4
 
 tensorflow:
+  require_gpu: false
   detection_epochs: 32
   classification_epochs: 64
   freeze_backbone_epochs: 5

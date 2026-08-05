@@ -29,7 +29,15 @@ def main() -> None:
     tf_cfg = config["tensorflow"]
 
     configure_gpu()
-    if tf_cfg.get("mixed_precision", True) and tf.config.list_physical_devices("GPU"):
+    tf_gpus = tf.config.list_physical_devices("GPU")
+    require_gpu = bool(tf_cfg.get("require_gpu", True))
+    if require_gpu and not tf_gpus:
+        raise RuntimeError(
+            "No TensorFlow GPU detected, but tensorflow.require_gpu=true. "
+            "Run this script in a GPU-enabled TensorFlow environment (for Windows, use WSL2)."
+        )
+
+    if tf_cfg.get("mixed_precision", True) and tf_gpus:
         tf.keras.mixed_precision.set_global_policy("mixed_float16")
 
     raw_dir = resolve_raw_dir(config)
