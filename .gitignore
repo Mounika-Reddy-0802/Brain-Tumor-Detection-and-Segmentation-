@@ -10,11 +10,13 @@ venv/
 .env
 .ipynb_checkpoints/
 
-logs/
-run_logs/
-checkpoints/
-models/
-outputs/
+# Leading slash matters: a bare "models/" also matches src/models/, which is
+# source code, and silently kept it out of the repository.
+/logs/
+/run_logs/
+/checkpoints/
+/models/
+/outputs/
 
 # Derived from Dataset/ by src/data/preprocessing.py and scripts/generate_masks.py.
 # Regenerate rather than commit ~13k files; both take a couple of minutes.
