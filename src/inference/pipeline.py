@@ -2,7 +2,11 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
-import torch
+
+try:
+    import torch
+except ImportError:  # segmentation is optional; detection/classification are TF-only
+    torch = None
 
 from src.data.preprocessing import preprocess_image
 from src.utils.project import EFFICIENTNET_INPUT_SCALE
@@ -24,10 +28,15 @@ class BrainTumorPipeline:
     DETECTION_THRESHOLD = 0.5
     MASK_THRESHOLD = 0.5
 
-    def __init__(self, tf_detector, tf_classifier, torch_unet, device: str = "cpu") -> None:
+    def __init__(self, tf_detector, tf_classifier, torch_unet=None, device: str = "cpu") -> None:
+        """torch_unet may be None, in which case predict() skips segmentation.
+
+        Detection and classification are pure TensorFlow, so the pipeline stays
+        usable on a host where PyTorch could not be installed.
+        """
         self.tf_detector = tf_detector
         self.tf_classifier = tf_classifier
-        self.torch_unet = torch_unet.to(device).eval()
+        self.torch_unet = torch_unet.to(device).eval() if torch_unet is not None else None
         self.device = device
 
     def _tf_input(self, img: np.ndarray) -> np.ndarray:
@@ -55,8 +64,11 @@ class BrainTumorPipeline:
         cls_probs = self.tf_classifier.predict(tf_in, verbose=0)[0]
         predicted_class = int(np.argmax(cls_probs))
 
-        with torch.no_grad():
-            mask_probs = torch.sigmoid(self.torch_unet(self._torch_input(img))).cpu().numpy()[0, 0]
+        if self.torch_unet is None:
+            mask_probs = np.zeros(img.shape[:2], dtype=np.float32)
+        else:
+            with torch.no_grad():
+                mask_probs = torch.sigmoid(self.torch_unet(self._torch_input(img))).cpu().numpy()[0, 0]
 
         binary_mask = (mask_probs >= self.MASK_THRESHOLD).astype(np.uint8) * 255
 

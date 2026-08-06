@@ -2,35 +2,31 @@
 # Streamlit Community Cloud installs from this file, so it is kept to what the
 # app actually imports. Training and notebook extras live in requirements-dev.txt.
 #
-# Deployment notes, each of which was an actual deploy failure:
-#
-#  * Set the Python version to 3.12 in the app's Advanced settings. Streamlit
-#    Cloud defaulted to 3.14, for which TensorFlow publishes no wheels at all,
-#    and the build failed with "no wheels with a matching Python ABI tag".
-#  * tensorflow-cpu rather than tensorflow: the default wheel bundles CUDA
-#    libraries worth gigabytes that a CPU-only host can never use.
-#  * torch from the PyTorch CPU index for the same reason; the PyPI default is
-#    the CUDA build.
-#  * opencv-python-headless rather than opencv-python: the server has no libGL,
-#    and the GUI build fails at import with "libGL.so.1: cannot open shared
-#    object file".
-
---extra-index-url https://download.pytorch.org/whl/cpu
+# IMPORTANT - the Python version is not controlled by this file.
+# Streamlit Community Cloud defaults to a Python version that TensorFlow does not
+# publish wheels for (3.14 at time of writing), and the build fails with
+# "no wheels with a matching Python ABI tag". The version can only be chosen when
+# the app is first created, under "Advanced settings" on the deploy screen.
+# Rebooting an existing app does not change it - the app has to be deleted and
+# recreated. Use Python 3.12.
 
 # Detection and classification
-tensorflow-cpu>=2.18.0
+tensorflow-cpu>=2.18.0,<2.21.0   # cpu build: the default wheel bundles unusable CUDA libraries
 # Keras 3.11 cannot deserialize models saved by a newer Keras: it rebuilds
 # EfficientNet's stem with one Rescaling layer where the saved graph has two.
-# Kaggle trained these on 3.13.2.
+# These models were trained on 3.13.2.
 keras>=3.13.0
 
-# Segmentation
+# Segmentation. Heavy - the PyPI linux wheel pulls CUDA libraries measured in
+# gigabytes. If the build fails on disk or times out, comment these three lines
+# out: the app detects their absence and runs detection and classification only,
+# with a note in the UI.
 torch>=2.2.0
 torchvision>=0.17.0
 segmentation-models-pytorch>=0.3.3
 
 # Preprocessing and display
-opencv-python-headless>=4.9.0
+opencv-python-headless>=4.9.0    # headless: the server has no libGL
 Pillow>=10.2.0
 numpy>=1.26.0
 matplotlib>=3.8.0

@@ -9,7 +9,6 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import streamlit as st
 import tensorflow as tf
-import torch
 from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -17,8 +16,23 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from src.inference.pipeline import BrainTumorPipeline
-from src.models.torch_unet import get_unet
 from src.utils.gpu_setup import configure_gpu
+
+# Segmentation is optional. PyTorch and segmentation-models-pytorch pull CUDA
+# libraries measured in gigabytes, which a constrained host may not be able to
+# install. Detection and classification are pure TensorFlow and always work, so
+# fall back to those two rather than failing to start at all.
+try:
+    import torch
+
+    from src.models.torch_unet import get_unet
+
+    SEGMENTATION_AVAILABLE = True
+except ImportError as exc:  # noqa: BLE001 - the reason is shown in the UI
+    torch = None
+    get_unet = None
+    SEGMENTATION_AVAILABLE = False
+    SEGMENTATION_IMPORT_ERROR = str(exc)
 
 configure_gpu()
 
@@ -41,7 +55,11 @@ def load_pipeline() -> BrainTumorPipeline:
     if not unet_path.exists():
         unet_path = ROOT / "models/unet_last.pth"
 
-    missing = [p.name for p in (detector_path, classifier_path, unet_path) if not p.exists()]
+    required = [detector_path, classifier_path]
+    if SEGMENTATION_AVAILABLE:
+        required.append(unet_path)
+
+    missing = [p.name for p in required if not p.exists()]
     if missing:
         st.error(
             f"Missing trained model file(s): {', '.join(missing)}.\n\n"
@@ -53,8 +71,10 @@ def load_pipeline() -> BrainTumorPipeline:
     tf_detector = tf.keras.models.load_model(detector_path)
     tf_classifier = tf.keras.models.load_model(classifier_path)
 
-    unet = get_unet(pretrained=False)
-    unet.load_state_dict(torch.load(unet_path, map_location="cpu"))
+    unet = None
+    if SEGMENTATION_AVAILABLE:
+        unet = get_unet(pretrained=False)
+        unet.load_state_dict(torch.load(unet_path, map_location="cpu"))
 
     return BrainTumorPipeline(tf_detector, tf_classifier, unet, device="cpu")
 
@@ -96,6 +116,8 @@ if uploaded is not None:
     with col2:
         st.subheader("Segmentation Overlay")
         st.image(result["overlay_image"], use_container_width=True)
+        if not SEGMENTATION_AVAILABLE:
+            st.caption("Segmentation is disabled on this deployment (PyTorch not installed).")
 
     with col3:
         st.subheader("Results")
