@@ -17,6 +17,8 @@ venv/
 /checkpoints/
 /models/
 /outputs/
+# Small enough to keep, and it is the headline result of the whole project.
+!/outputs/evaluation_report.json
 
 # Derived from Dataset/ by src/data/preprocessing.py and scripts/generate_masks.py.
 # Regenerate rather than commit ~13k files; both take a couple of minutes.

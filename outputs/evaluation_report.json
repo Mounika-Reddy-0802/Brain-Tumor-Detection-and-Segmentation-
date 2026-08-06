@@ -1,0 +1,61 @@
+{
+  "detection": {
+    "accuracy": 0.988125,
+    "precision": 0.9991546914623838,
+    "recall": 0.985,
+    "specificity": 0.9975,
+    "f1": 0.9920268569030634,
+    "auc_roc": 0.9995270833333334
+  },
+  "classification": {
+    "accuracy": 0.956875,
+    "macro_f1": 0.9560897499258485,
+    "weighted_f1": 0.9560897499258485,
+    "per_class_precision": {
+      "glioma": 0.9912536443148688,
+      "meningioma": 0.9074074074074074,
+      "notumor": 0.9569377990430622,
+      "pituitary": 0.9803439803439803
+    },
+    "per_class_recall": {
+      "glioma": 0.85,
+      "meningioma": 0.98,
+      "notumor": 1.0,
+      "pituitary": 0.9975
+    },
+    "confusion_matrix": [
+      [
+        340,
+        39,
+        18,
+        3
+      ],
+      [
+        3,
+        392,
+        0,
+        5
+      ],
+      [
+        0,
+        0,
+        400,
+        0
+      ],
+      [
+        0,
+        1,
+        0,
+        399
+      ]
+    ]
+  },
+  "segmentation": {
+    "dice": 0.5770029853625277,
+    "iou": 0.4932884293319442,
+    "scored_images": 873,
+    "empty_reference_images": 727,
+    "empty_reference_true_negative_rate": 0.8308115543328748,
+    "reference_masks": "precomputed weak labels"
+  }
+}

@@ -1,5 +1,11 @@
 # Deep Learning Frameworks
 tensorflow>=2.15.0
+# Keras 3.11 cannot load ImageNet weights into the V1 EfficientNets, and cannot
+# deserialize models saved by a newer Keras: it rebuilds EfficientNet's stem with
+# one Rescaling layer instead of two, so the graph no longer matches. 3.13 fixes
+# both. Kaggle ships 3.13.2; pin at least that locally or the trained models will
+# not load.
+keras>=3.13.0
 torch>=2.2.0
 torchvision>=0.17.0
 timm>=0.9.12

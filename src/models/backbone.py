@@ -10,6 +10,16 @@ EfficientNetV2 and ResNet are unaffected, so this is specific to the family this
 project uses. Loading the same file by layer name sidesteps the index shift and
 restores every convolution and batch-norm weight, so build_efficientnet_b3
 tries the normal path first and falls back to name-based loading.
+
+Keras 3.13 fixes this, and requirements.txt pins that, so the fallback should
+never run in a correctly-installed environment. It is kept as a safety net.
+
+Be aware the fallback is not perfectly equivalent: Keras only inserts the second
+(ImageNet stddev) Rescaling layer on the weights="imagenet" path, so a model
+built here through the fallback has a two-layer stem preamble where a natively
+built one has three. That is harmless for training from scratch, but it means
+weights saved by a newer Keras will not align if loaded into a fallback-built
+model. Upgrade Keras rather than relying on this path.
 """
 
 from __future__ import annotations
