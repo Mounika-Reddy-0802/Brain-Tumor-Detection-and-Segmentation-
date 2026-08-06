@@ -30,6 +30,12 @@ data/masks/
 # Submission bundles
 *.zip
 
+# Working documents kept locally, not published with the project.
+# The plan is superseded by the README; the Kaggle notebook was pushed by
+# Kaggle's "Save copy to GitHub" and duplicates notebooks/kaggle_train.ipynb.
+/brain_tumor_project_plan (1).md
+/notebook73b290e23e.ipynb
+
 *.keras
 *.h5
 *.pth
