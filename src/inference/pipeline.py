@@ -11,6 +11,7 @@ from src.utils.project import EFFICIENTNET_INPUT_SCALE
 IMAGENET_MEAN = np.array([0.485, 0.456, 0.406], dtype=np.float32)
 IMAGENET_STD = np.array([0.229, 0.224, 0.225], dtype=np.float32)
 CLASS_NAMES = ["Glioma", "Meningioma", "No Tumor", "Pituitary"]
+NO_TUMOR_INDEX = CLASS_NAMES.index("No Tumor")
 
 
 class BrainTumorPipeline:
@@ -59,10 +60,19 @@ class BrainTumorPipeline:
 
         binary_mask = (mask_probs >= self.MASK_THRESHOLD).astype(np.uint8) * 255
 
+        # Report what the classifier actually predicted rather than overriding it
+        # with the detector's verdict. Overriding produced displays that
+        # contradicted the probability chart shown beside them - "No Tumor"
+        # printed above a bar chart with meningioma at 0.85. The two models are
+        # independent, so surface the disagreement instead of hiding it.
+        classifier_says_tumor = predicted_class != NO_TUMOR_INDEX
+
         return {
             "tumor_detected": tumor_detected,
             "detection_confidence": det_prob,
-            "tumor_type": CLASS_NAMES[predicted_class] if tumor_detected else "No Tumor",
+            "tumor_type": CLASS_NAMES[predicted_class],
+            "class_confidence": float(cls_probs[predicted_class]),
+            "models_disagree": tumor_detected != classifier_says_tumor,
             "class_probabilities": dict(zip(CLASS_NAMES, cls_probs.tolist())),
             "segmentation_mask": binary_mask,
             "segmentation_probs": mask_probs,

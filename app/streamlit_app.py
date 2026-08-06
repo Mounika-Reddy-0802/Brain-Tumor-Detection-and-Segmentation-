@@ -86,7 +86,17 @@ if uploaded is not None:
             st.success(f"No tumor: {1 - result['detection_confidence']:.1%} confidence")
 
         st.markdown("---")
-        st.markdown(f"Predicted tumor type: {result['tumor_type']}")
+        st.markdown("Classification (TensorFlow)")
+        st.markdown(
+            f"Predicted type: **{result['tumor_type']}** "
+            f"({result['class_confidence']:.1%} confidence)"
+        )
+        if result["models_disagree"]:
+            st.warning(
+                "The detector and the classifier disagree. They are separate "
+                "models, so treat this scan as uncertain rather than trusting "
+                "either verdict."
+            )
 
         probs = result["class_probabilities"]
         fig, ax = plt.subplots(figsize=(4, 2.5))
