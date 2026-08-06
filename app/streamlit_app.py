@@ -29,11 +29,31 @@ st.caption("Upload a brain MRI image for detection, classification, and segmenta
 
 @st.cache_resource
 def load_pipeline() -> BrainTumorPipeline:
-    tf_detector = tf.keras.models.load_model("models/detection_model.keras")
-    tf_classifier = tf.keras.models.load_model("models/classification_model.keras")
+    """Load all three trained models once per session.
+
+    Paths are relative to the repository root, which is the working directory
+    both for `streamlit run app/streamlit_app.py` and on Streamlit Community
+    Cloud.
+    """
+    detector_path = ROOT / "models/detection_model.keras"
+    classifier_path = ROOT / "models/classification_model.keras"
+    unet_path = ROOT / "models/best_unet.pth"
+    if not unet_path.exists():
+        unet_path = ROOT / "models/unet_last.pth"
+
+    missing = [p.name for p in (detector_path, classifier_path, unet_path) if not p.exists()]
+    if missing:
+        st.error(
+            f"Missing trained model file(s): {', '.join(missing)}.\n\n"
+            "The app cannot run without them. Train them with the scripts in "
+            "`src/training/`, or download the release artifacts into `models/`."
+        )
+        st.stop()
+
+    tf_detector = tf.keras.models.load_model(detector_path)
+    tf_classifier = tf.keras.models.load_model(classifier_path)
 
     unet = get_unet(pretrained=False)
-    unet_path = "models/best_unet.pth" if Path("models/best_unet.pth").exists() else "models/unet_last.pth"
     unet.load_state_dict(torch.load(unet_path, map_location="cpu"))
 
     return BrainTumorPipeline(tf_detector, tf_classifier, unet, device="cpu")

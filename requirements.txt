@@ -1,30 +1,39 @@
-# Deep Learning Frameworks
-tensorflow>=2.15.0
-# Keras 3.11 cannot load ImageNet weights into the V1 EfficientNets, and cannot
-# deserialize models saved by a newer Keras: it rebuilds EfficientNet's stem with
-# one Rescaling layer instead of two, so the graph no longer matches. 3.13 fixes
-# both. Kaggle ships 3.13.2; pin at least that locally or the trained models will
-# not load.
+# Runtime dependencies for the Streamlit app.
+# Streamlit Community Cloud installs from this file, so it is kept to what the
+# app actually imports. Training and notebook extras live in requirements-dev.txt.
+#
+# Deployment notes, each of which was an actual deploy failure:
+#
+#  * Set the Python version to 3.12 in the app's Advanced settings. Streamlit
+#    Cloud defaulted to 3.14, for which TensorFlow publishes no wheels at all,
+#    and the build failed with "no wheels with a matching Python ABI tag".
+#  * tensorflow-cpu rather than tensorflow: the default wheel bundles CUDA
+#    libraries worth gigabytes that a CPU-only host can never use.
+#  * torch from the PyTorch CPU index for the same reason; the PyPI default is
+#    the CUDA build.
+#  * opencv-python-headless rather than opencv-python: the server has no libGL,
+#    and the GUI build fails at import with "libGL.so.1: cannot open shared
+#    object file".
+
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+# Detection and classification
+tensorflow-cpu>=2.18.0
+# Keras 3.11 cannot deserialize models saved by a newer Keras: it rebuilds
+# EfficientNet's stem with one Rescaling layer where the saved graph has two.
+# Kaggle trained these on 3.13.2.
 keras>=3.13.0
+
+# Segmentation
 torch>=2.2.0
 torchvision>=0.17.0
-timm>=0.9.12
 segmentation-models-pytorch>=0.3.3
-# Optional: tensorflow-addons has no wheels on some Python/Windows combos and is not required by current source.
-# tensorflow-addons>=0.23.0
 
-# Image Processing
-opencv-python>=4.9.0
-albumentations>=1.3.1
+# Preprocessing and display
+opencv-python-headless>=4.9.0
 Pillow>=10.2.0
-
-# Data and Utilities
 numpy>=1.26.0
-scikit-learn>=1.4.0
 matplotlib>=3.8.0
-seaborn>=0.13.0
-tqdm>=4.66.0
 PyYAML>=6.0.1
 
-# App
 streamlit>=1.33.0

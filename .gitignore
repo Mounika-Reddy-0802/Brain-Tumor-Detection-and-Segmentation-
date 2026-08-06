@@ -15,8 +15,12 @@ venv/
 /logs/
 /run_logs/
 /checkpoints/
-/models/
-/outputs/
+
+# Note the trailing /* rather than /. Git does not descend into an ignored
+# directory, so a "!" exception for a file inside one never takes effect.
+# Ignoring the contents instead leaves the directory itself visible.
+/models/*
+/outputs/*
 # Small enough to keep, and it is the headline result of the whole project.
 !/outputs/evaluation_report.json
 
@@ -41,6 +45,14 @@ data/masks/
 *.pth
 *.pt
 *.onnx
+
+# Exception: the three trained models the Streamlit app loads. Streamlit
+# Community Cloud deploys straight from this repository and has no other way to
+# obtain them, so they are committed despite the ~147 MB cost. Saved without
+# optimizer state, which is why they are a third of their original size.
+!/models/detection_model.keras
+!/models/classification_model.keras
+!/models/best_unet.pth
 
 .DS_Store
 Thumbs.db
